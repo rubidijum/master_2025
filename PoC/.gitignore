@@ -1,1 +1,6 @@
 zephyr/*
+build/*
+applications_aes_app/build/*
+applications_aes_app/zephyr/*
+rpa_attack_app/build/*
+rpa_attack_app/zephyr/*
