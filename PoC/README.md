@@ -62,3 +62,22 @@ west update
 cd ~/zephyrproject/zephyr
 west sdk install
 ```
+
+
+###### Building the sample apps
+
+In order to generate a zephyr .elf executable, the following steps should be run in sequence
+
+1) Make sure that the virtual environment is activated (`source ..`)
+2) `cd` into a `zephyrproject` directory (where the source code for ZephyrOS has been downloaded)
+3) Run the west build command: `west build -p always -b qemu_cortex_m3 <path_to_the_sample_app>`
+
+At the end of the successful build, the zephyr.elf will be generated in the build folder.
+
+Alternatively, run the `get_zephyr_elf.sh` helper script to generate the executable automatically.
+
+
+In order to dissasemble the binaries for targeted trace generation, ARM toolchain is required.
+`sudo apt install gcc-arm-none-eabi`
+
+Dissasembly output: `arm-none-eabi-objdump -d build/zephyr/zephyr.elf`
