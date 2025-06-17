@@ -5,42 +5,67 @@ import lascar
 from rainbow import TraceConfig, Print, HammingWeight
 from rainbow.devices import rainbow_stm32f215
 
+print("Running trace generation for mbedtls implementation target...")
+
 e = rainbow_stm32f215(print_config=Print.Functions, trace_config=TraceConfig(register=HammingWeight(), mem_value=HammingWeight()))
-e.load("zephyr.elf")
+e.load("zephyr_mbedtls_masked.elf")
 e.setup()
 
 key = b"\xde\xad\xbe\xef" * 4
 print(key)
 
-AES_CIPHER = e.functions.get("Cipher")
-if AES_CIPHER is None:
-    raise ValueError("'Cipher' not found in elf symbols!")
-print(f"Cipher found at {hex(AES_CIPHER)}")
+MBEDTLS_AES_FUNC = e.functions.get("mbedtls_aes_crypt_ecb")
+if MBEDTLS_AES_FUNC is None:
+    raise ValueError("'mbedtls_aes_crypt_ecb' not found in elf symbols!")
+print(f"mbedtls_aes_crypt_ecb found at {hex(MBEDTLS_AES_FUNC)}")
 
-def tinyaes_encrypt(key, plaintext):
+def mbedtls_encrypt(key, plaintext):
 
     e.reset()
+    # e.emu.mem_map(0x20004000, 0x1000)
 
-    #already hardcoded key in zephyr (see dissassembly)
-    key_addr = 0x20000030
+    # $: arm-none-eabi-nm build/zephyr/zephyr.elf | grep -C 5 key
+    # $: 200001d4 D irk_key
+    key_addr = 0x200001d4
 
-    # AES_init_ctx(struct AES_ctx* ctx, const uint8_t* key)
+    # key_addr = 0x20004000
+
+    STACK_BASE = 0x20003000
+    STACK_SIZE = 0x800
+    e[STACK_BASE + STACK_SIZE] = 0
+
+
+    # mbedtls_aes_setkey_enc(mbedtls_aes_context *ctx, const unsigned char *key,
+    #                        unsigned int keybits)
     ctx_addr = 0xDEAD0000
     e[ctx_addr] = 0
+    AES_CTX_SIZE = 277
+    e[ctx_addr + AES_CTX_SIZE] = 0
+
+    e[ctx_addr + e.PAGE_SIZE] = 0
+
+    AES_KEY_BITS = 128
 
     e['r0'] = ctx_addr
     e['r1'] = key_addr
-    e.start(e.functions['AES_init_ctx'] | 1, 0)
+    e['r2'] = AES_KEY_BITS
+    e.start(e.functions['mbedtls_aes_setkey_enc_masked'] | 1, 0)
 
-    #AES_ECB_encrypt(const struct AES_ctx* ctx, uint8_t* buf)
+    # int mbedtls_internal_aes_encrypt(mbedtls_aes_context *ctx,
+    #                              const unsigned char input[16],
+    #                              unsigned char output[16])
     e['r0'] = ctx_addr
-
+    # Inject the generated plaintext
     pt_addr = 0xDEAD1000
     e[pt_addr] = plaintext
-
     e['r1'] = pt_addr
 
-    e.start(e.functions['AES_ECB_encrypt'] | 1, 0)
+    # Avoid UC_ERR_WRITE_UNMAPPED error
+    buf_out = 0xDEAD2000
+    e[buf_out] = b"\x00" * 16
+    e['r2'] = buf_out
+
+    e.start(e.functions['mbedtls_internal_aes_encrypt_masked'] | 1, 0)
     
     trace = []
     for event in e.trace:
@@ -54,17 +79,17 @@ class CortexMAesContainer(lascar.AbstractContainer):
 
     def generate_trace(self, idx):
         plaintext = np.random.randint(0, 256, (16,), np.uint8)
-        leakage = tinyaes_encrypt(key, plaintext.tobytes())
+        leakage = mbedtls_encrypt(key, plaintext.tobytes())
         return lascar.Trace(leakage, plaintext)
 
-
-N = 5000
+N = 1
 
 container = CortexMAesContainer(N)
 
 print(f"CONTAINER_data: {container[24][0]}")
 print(f"CONTAINER_meta: {container[24][1]}")
 
+# Labelize the data with the SBOX intermediate value
 cont_traces = [(t,l) for (t, l) in container]
 cont_lbls = [np.array(l) for (_, l) in cont_traces]
 k = [byte for byte in key]
@@ -82,10 +107,11 @@ cont_trcs=np.array(cont_trcs)
 print(f"CONTAINER_trc_shape: {cont_trcs.shape}")
 print(f"CONTAINER_lbl_shape: {cont_lbls.shape}")
 
-np.savez("container_traces", traces=cont_trcs, labels=cont_lbls)
+# Save the generated traces in the npz format
+np.savez("container_traces_mbedtls_masked", traces=cont_trcs, labels=cont_lbls)
 
 
-print("Running the attack...")
+
 
 from lascar import *
 
@@ -98,5 +124,3 @@ session = lascar.Session(CortexMAesContainer(N), engines=cpa_engines, name="lasc
 guess_key = bytes([engine.finalize().max(1).argmax() for engine in cpa_engines])
 
 print(f"Guessed key is : {hexlify(guess_key).upper()}")
-
-print("Correct key is :", hexlify(key).upper())

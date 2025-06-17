@@ -17,20 +17,32 @@ print(key)
 MBEDTLS_AES_FUNC = e.functions.get("mbedtls_aes_crypt_ecb")
 if MBEDTLS_AES_FUNC is None:
     raise ValueError("'mbedtls_aes_crypt_ecb' not found in elf symbols!")
-print(f"Cipher found at {hex(MBEDTLS_AES_FUNC)}")
+print(f"mbedtls_aes_crypt_ecb found at {hex(MBEDTLS_AES_FUNC)}")
 
 def mbedtls_encrypt(key, plaintext):
 
     e.reset()
+    # e.emu.mem_map(0x20004000, 0x1000)
 
     # $: arm-none-eabi-nm build/zephyr/zephyr.elf | grep -C 5 key
     # $: 200001d4 D irk_key
     key_addr = 0x200001d4
 
+    # key_addr = 0x20004000
+
+    STACK_BASE = 0x20003000
+    STACK_SIZE = 0x800
+    e[STACK_BASE + STACK_SIZE] = 0
+
+
     # mbedtls_aes_setkey_enc(mbedtls_aes_context *ctx, const unsigned char *key,
     #                        unsigned int keybits)
     ctx_addr = 0xDEAD0000
     e[ctx_addr] = 0
+    AES_CTX_SIZE = 277
+    e[ctx_addr + AES_CTX_SIZE] = 0
+
+    e[ctx_addr + e.PAGE_SIZE] = 0
 
     AES_KEY_BITS = 128
 
@@ -39,21 +51,21 @@ def mbedtls_encrypt(key, plaintext):
     e['r2'] = AES_KEY_BITS
     e.start(e.functions['mbedtls_aes_setkey_enc'] | 1, 0)
 
-    # int mbedtls_aes_crypt_ecb(mbedtls_aes_context *ctx,
-    #                          int mode,
-    #                          const unsigned char input[16],
-    #                          unsigned char output[16])
-    e['r0'] = ctx_addr    
-    MBEDTLS_AES_ENCRYPT = 1
-    e['r1'] = MBEDTLS_AES_ENCRYPT
-    
+    # int mbedtls_internal_aes_encrypt(mbedtls_aes_context *ctx,
+    #                              const unsigned char input[16],
+    #                              unsigned char output[16])
+    e['r0'] = ctx_addr
     # Inject the generated plaintext
     pt_addr = 0xDEAD1000
     e[pt_addr] = plaintext
-
     e['r1'] = pt_addr
 
-    e.start(e.functions['mbedtls_aes_crypt_ecb'] | 1, 0)
+    # Avoid UC_ERR_WRITE_UNMAPPED error
+    buf_out = 0xDEAD2000
+    e[buf_out] = b"\x00" * 16
+    e['r2'] = buf_out
+
+    e.start(e.functions['mbedtls_internal_aes_encrypt'] | 1, 0)
     
     trace = []
     for event in e.trace:
