@@ -1,5 +1,6 @@
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/addr.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/crypto.h>
@@ -13,6 +14,15 @@ uint8_t ciphertext[16];
 LOG_MODULE_REGISTER(rpa_attack_app);
 
 int main(void){
+	printk("RPA Attack Application\n");
+	bt_enable(NULL);
+	if(bt_is_ready() != 0){
+		LOG_ERR("Bluetooth is not ready!");
+		// return -1;
+	}
+	LOG_INF("Bluetooth is ready!");
+
+	LOG_INF("Creating bluetooth identity...");
 
 	int id = bt_id_create(NULL, irk_key);
 	//bt_id_reset(id, NULL, irk_key);
@@ -34,8 +44,8 @@ int main(void){
 	LOG_INF("Starting advertisement...");
 
 	const struct bt_le_ext_adv_start_param ext_adv_params = {
-		.timeout = 60,
-		.num_events = 100,
+		.timeout = 600,
+		.num_events = 255,
 	};
 
 	err = bt_le_ext_adv_start(adv, &ext_adv_params);
@@ -44,7 +54,7 @@ int main(void){
 		return -1;
 	}
 
-	k_sleep(K_SECONDS(60));
+	k_sleep(K_SECONDS(600));
 
 	bt_le_ext_adv_stop(adv);
 	bt_le_ext_adv_delete(adv);
