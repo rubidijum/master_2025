@@ -82,7 +82,7 @@ class CortexMAesContainer(lascar.AbstractContainer):
         leakage = mbedtls_encrypt(key, plaintext.tobytes())
         return lascar.Trace(leakage, plaintext)
 
-N = 1
+N = 1000
 
 container = CortexMAesContainer(N)
 
@@ -97,6 +97,9 @@ keys = [np.array(k)] * len(cont_lbls)
 print(f"keys - {len(keys)}")
 print(f"cont_lbls - {len(cont_lbls)}")
 
+plaintext = cont_lbls.copy()
+
+# Apply the SBOX to the labels
 cont_lbls = [sbox[np.array(keys) ^ np.array(cont_lbls)]]
 
 cont_trcs = [t for (t, _) in cont_traces]
@@ -108,7 +111,10 @@ print(f"CONTAINER_trc_shape: {cont_trcs.shape}")
 print(f"CONTAINER_lbl_shape: {cont_lbls.shape}")
 
 # Save the generated traces in the npz format
-np.savez("container_traces_mbedtls_masked", traces=cont_trcs, labels=cont_lbls)
+np.savez("container_traces_mbedtls_masked_valid", traces=cont_trcs, 
+                                                  labels=cont_lbls, 
+                                                  keys=keys, 
+                                                  plaintext=plaintext)
 
 
 
