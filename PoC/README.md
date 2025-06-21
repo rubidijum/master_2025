@@ -76,8 +76,13 @@ At the end of the successful build, the zephyr.elf will be generated in the buil
 
 Alternatively, run the `get_zephyr_elf.sh` helper script to generate the executable automatically.
 
+#### Dissasembling apps
+
+For the accurate trace generation, analysis of the compiled zephyr binary needs to be performed. Rainbow tool provides funcion hooking mechanisms, memory access monitoring, register monitoring and more. For understanding where to hook into, dissassembly is necessary.
 
 In order to dissasemble the binaries for targeted trace generation, ARM toolchain is required.
 `sudo apt install gcc-arm-none-eabi`
 
 Dissasembly output: `arm-none-eabi-objdump -d build/zephyr/zephyr.elf`
+
+Getting the symbols: `arm-none-eabi-nm build/zephyr/zephyr.elf`
