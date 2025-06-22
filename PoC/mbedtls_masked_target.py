@@ -5,14 +5,36 @@ import lascar
 from rainbow import TraceConfig, Print, HammingWeight
 from rainbow.devices import rainbow_stm32f215
 
-print("Running trace generation for mbedtls implementation target...")
+import argparse
+
+# Argument parser
+parser = argparse.ArgumentParser(description="Trace generation for AES SCA")
+
+parser.add_argument("--CPA_ATTACK", action="store_true",
+                    help="Run CPA attack on generated traces.")
+
+parser.add_argument("--N_PROFILING", type=int, default=50000,
+                    help="Number of profiling traces to generate.")
+
+parser.add_argument("--N_ATTACK", type=int, default=5000,
+                    help="Number of attack traces to generate.")
+
+args = parser.parse_args()
+
+# Safety check
+if args.N_PROFILING < args.N_ATTACK:
+    raise ValueError(f"N_PROFILING ({args.N_PROFILING}) must be >= N_ATTACK ({args.N_ATTACK})")
+
+print(f"[CONFIG] Profiling: {args.N_PROFILING} | Attack: {args.N_ATTACK} | CPA: {args.CPA_ATTACK}")
+
+print("Running trace generation for masked mbedtls implementation target...")
 
 e = rainbow_stm32f215(print_config=Print.Functions, trace_config=TraceConfig(register=HammingWeight(), mem_value=HammingWeight()))
 e.load("zephyr_mbedtls_masked.elf")
 e.setup()
 
 key = b"\xde\xad\xbe\xef" * 4
-print(key)
+print(f"Fixed key: {key}")
 
 MBEDTLS_AES_FUNC = e.functions.get("mbedtls_aes_crypt_ecb")
 if MBEDTLS_AES_FUNC is None:
@@ -26,7 +48,7 @@ def mbedtls_encrypt(key, plaintext):
 
     # $: arm-none-eabi-nm build/zephyr/zephyr.elf | grep -C 5 key
     # $: 200001d4 D irk_key
-    key_addr = 0x200001d4
+    key_addr = 20000388 #0x200001d4
 
     # key_addr = 0x20004000
 
@@ -82,51 +104,63 @@ class CortexMAesContainer(lascar.AbstractContainer):
         leakage = mbedtls_encrypt(key, plaintext.tobytes())
         return lascar.Trace(leakage, plaintext)
 
-N = 1000
+container_profiling = CortexMAesContainer(args.N_PROFILING)
+container_attack = CortexMAesContainer(args.N_ATTACK)
 
-container = CortexMAesContainer(N)
+def labelize_trace(container):
+    """
+    Labelize the trace with the SBOX intermediate value.
+    """
+    traces = [(t, l) for (t, l) in container]
+    lbls = [np.array(l) for (_, l) in traces]
+    k = [byte for byte in key]
+    keys = [np.array(k)] * len(lbls)
+    print(f"keys len - {len(keys)}")
+    print(f"lbls len - {len(lbls)}")
 
-print(f"CONTAINER_data: {container[24][0]}")
-print(f"CONTAINER_meta: {container[24][1]}")
+    plaintext = lbls.copy()
 
-# Labelize the data with the SBOX intermediate value
-cont_traces = [(t,l) for (t, l) in container]
-cont_lbls = [np.array(l) for (_, l) in cont_traces]
-k = [byte for byte in key]
-keys = [np.array(k)] * len(cont_lbls)
-print(f"keys - {len(keys)}")
-print(f"cont_lbls - {len(cont_lbls)}")
+    # Apply the SBOX to the labels
+    lbls = [sbox[np.array(keys) ^ np.array(lbls)]]
 
-plaintext = cont_lbls.copy()
+    trcs = [t for (t, _) in traces]
 
-# Apply the SBOX to the labels
-cont_lbls = [sbox[np.array(keys) ^ np.array(cont_lbls)]]
+    lbls = np.array(lbls)
+    trcs = np.array(trcs)
 
-cont_trcs = [t for (t, _) in cont_traces]
+    print(f"trc_shape: {trcs.shape}")
+    print(f"lbl_shape: {lbls.shape}")
 
-cont_lbls=np.array(cont_lbls)
-cont_trcs=np.array(cont_trcs)
+    return trcs, lbls, keys, plaintext
 
-print(f"CONTAINER_trc_shape: {cont_trcs.shape}")
-print(f"CONTAINER_lbl_shape: {cont_lbls.shape}")
+## Profiling traces
 
+profiling_traces, profiling_labels, profiling_keys, profiling_plaintext = labelize_trace(container_profiling)
 # Save the generated traces in the npz format
-np.savez("container_traces_mbedtls_masked_valid", traces=cont_trcs, 
-                                                  labels=cont_lbls, 
-                                                  keys=keys, 
-                                                  plaintext=plaintext)
+np.savez("profiling_traces_mbedtls_masked_valid", traces=profiling_traces,
+                                                  labels=profiling_labels, 
+                                                  keys=profiling_keys, 
+                                                  plaintext=profiling_plaintext)
+
+## Attack traces
+
+attack_traces, attack_labels, attack_keys, attack_plaintext = labelize_trace(container_attack)
+# Save the generated traces in the npz format
+np.savez("attack_traces_mbedtls_masked_valid", traces=attack_traces,
+                                                  labels=attack_labels, 
+                                                  keys=attack_keys, 
+                                                  plaintext=attack_plaintext)
 
 
+if args.CPA_ATTACK:
+    from lascar import *
 
+    cpa_engines = [lascar.CpaEngine(name=f"CPA_{i}", 
+                                    selection_function=lambda plaintext, key_byte, index=i: sbox[plaintext[index] ^ key_byte],
+                                    guess_range=range(256)) for i in range(16)]
 
-from lascar import *
+    session = lascar.Session(CortexMAesContainer(args.N_PROFILING), engines=cpa_engines, name="lascar CPA").run()
 
-cpa_engines = [lascar.CpaEngine(name=f"CPA_{i}", 
-                                selection_function=lambda plaintext, key_byte, index=i: sbox[plaintext[index] ^ key_byte],
-                                guess_range=range(256)) for i in range(16)]
+    guess_key = bytes([engine.finalize().max(1).argmax() for engine in cpa_engines])
 
-session = lascar.Session(CortexMAesContainer(N), engines=cpa_engines, name="lascar CPA").run()
-
-guess_key = bytes([engine.finalize().max(1).argmax() for engine in cpa_engines])
-
-print(f"Guessed key is : {hexlify(guess_key).upper()}")
+    print(f"Guessed key is : {hexlify(guess_key).upper()}")
