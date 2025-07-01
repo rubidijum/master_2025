@@ -7,6 +7,10 @@
 #include <stdio.h>
 #include <zephyr/logging/log.h>
 
+#define MBEDTLS_SELF_TEST
+#define MBEDTLS_CIPHER_MODE_ECB
+#include "mbedtls/aes.h"
+
 uint8_t irk_key[16] = {0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF};
 uint8_t plaintext[16] __attribute__((section(".uninit")));
 uint8_t ciphertext[16];
@@ -15,6 +19,9 @@ LOG_MODULE_REGISTER(rpa_attack_app);
 
 int main(void){
 	printk("RPA Attack Application\n");
+
+	// return mbedtls_aes_self_test(1);
+
 	bt_enable(NULL);
 	if(bt_is_ready() != 0){
 		LOG_ERR("Bluetooth is not ready!");

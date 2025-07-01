@@ -48,7 +48,7 @@ def mbedtls_encrypt(key, plaintext):
 
     # $: arm-none-eabi-nm build/zephyr/zephyr.elf | grep -C 5 key
     # $: 200001d4 D irk_key
-    key_addr = 20000388 #0x200001d4
+    key_addr = 0x20000388
 
     # key_addr = 0x20004000
 
