@@ -46,6 +46,12 @@ def mbedtls_encrypt(key, plaintext):
     e.reset()
     # e.emu.mem_map(0x20004000, 0x1000)
 
+    # Since Unicorn doesn't emulate the entropy =>
+    # Before running the encryption, inject the masks into the memory.
+    mask_addr = 0x20004000
+    mask = np.random.randint(0, 256, (16,), np.uint8)
+    e[mask_addr] = mask.tobytes()
+
     # $: arm-none-eabi-nm build/zephyr/zephyr.elf | grep -C 5 key
     # $: 200001d4 D irk_key
     key_addr = 0x20000388
