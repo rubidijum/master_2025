@@ -1,0 +1,7 @@
+config MBEDTLS_ENABLE_MASKING
+	bool "Enables masking countermeasure for SCA"
+    default n
+config INJECT_MASKS
+    bool "Enables injecting masks from Unicorn"
+    default n
+source "Kconfig.zephyr"
