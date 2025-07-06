@@ -58,9 +58,10 @@ if __name__ == "__main__":
         traces_all.append(trace_obj.leakage)
         labels_all.append([sbox[np.array(keys) ^ np.array(trace_obj.value)]])
 
-    print(f"Saving profiling traces...")
+    profiling_dataset_file = f"profiling_{args.target}_{timestamp}.npz"
+    print(f"Saving profiling traces to {profiling_dataset_file}...")
     np.savez(
-            f"profiling_{args.target}_{timestamp}.npz",
+            profiling_dataset_file,
             traces=traces_all,
             labels=labels_all,
             plaintexts=plaintext_all,
@@ -83,9 +84,10 @@ if __name__ == "__main__":
         traces_all.append(trace_obj.leakage)
         labels_all.append([sbox[np.array(keys) ^ np.array(trace_obj.value)]])
 
-    print(f"Saving attack traces...")
+    attack_dataset_file = f"attack_{args.target}_{timestamp}.npz"
+    print(f"Saving attack traces to {attack_dataset_file}...")
     np.savez(
-            f"attack_{args.target}_{timestamp}.npz",
+            attack_dataset_file,
             traces=traces_all,
             labels=labels_all,
             plaintexts=plaintext_all,
