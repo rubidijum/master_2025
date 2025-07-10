@@ -1,5 +1,6 @@
 import numpy as np
 from core_sca_generator import SideChannelTarget
+import random as rand
 
 AES_KEY_BITS=128
 
@@ -17,10 +18,15 @@ class MbedtlsMaskedTarget(SideChannelTarget):
             "mbedtls_internal_aes_encrypt_masked" not in self.emu.functions:
             raise ValueError("Required mbedtls functions not found in ELF symbols. Try recompiling and/or check symbol table.")
         
+        self.key_mask = rand.randbytes(16)
+        
     def _encrypt_step(self, plaintext: bytes):
         self.emu.reset()
 
         # Define memory layout
+        mask_key_addr = 0x00020D40
+        mask_sbox_addr = 0x00020D50
+        mask_subword_addr = 0x00020D60
         key_addr = 0x20000388
         ctx_addr = 0xDEAD0000
         pt_addr = 0xDEAD1000
@@ -30,6 +36,15 @@ class MbedtlsMaskedTarget(SideChannelTarget):
         self.emu[ctx_addr] = 0
         
         self.emu[key_addr] = self.key
+
+        # Inject masks for key expansion
+        self.emu[mask_key_addr] = self.key_mask
+        
+        subword_mask = rand.randbytes(4)
+        self.emu[mask_subword_addr] = subword_mask
+
+        sbox_mask = rand.randbytes(16)
+        self.emu[mask_sbox_addr] = sbox_mask
 
         # Setup encryption key
         self.emu['r0'] = ctx_addr

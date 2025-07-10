@@ -5,6 +5,7 @@ from mbedtls_target_generator import MbedtlsTarget
 from mbedtls_masked_target_generator import MbedtlsMaskedTarget
 import numpy as np
 import lascar
+from tqdm import tqdm
 
 from lascar.tools.aes import sbox
 
@@ -42,31 +43,48 @@ if __name__ == "__main__":
     else:
         raise ValueError("Unsupported target.")
 
-    print(f"Generating {args.N_PROFILING} profiling traces...")
-    container = CortexMAesContainer(profiling_target, args.N_PROFILING)
-    print(f"{args.N_PROFILING} traces generated")
+    # print(f"Generating {args.N_PROFILING} profiling traces...")
+    # container = CortexMAesContainer(profiling_target, args.N_PROFILING)
+    # print(f"{args.N_PROFILING} traces generated")
 
-    print("Labeling profiling traces...")
-    k = [byte for byte in profiling_target.key]
-    keys = [np.array(k)] * args.N_PROFILING
+    # print("Labeling profiling traces...")
+    # k = [byte for byte in profiling_target.key]
+    # keys = [np.array(k)] * args.N_PROFILING
     
-    traces_all = []
-    labels_all = []
-    plaintext_all = []
-    for trace_obj in container:
-        plaintext_all.append(trace_obj.value)
-        traces_all.append(trace_obj.leakage)
-        labels_all.append([sbox[np.array(keys) ^ np.array(trace_obj.value)]])
+    # traces_all = []
+    # labels_all = []
+    # plaintext_all = []
+    # for idx, trace_obj in enumerate(tqdm(container)):
+    #     plaintext_all.append(trace_obj.value)
+    #     traces_all.append(trace_obj.leakage)
+    #     labels_all.append(sbox[k ^ trace_obj.value])
 
-    profiling_dataset_file = f"profiling_{args.target}_{timestamp}.npz"
-    print(f"Saving profiling traces to {profiling_dataset_file}...")
-    np.savez(
-            profiling_dataset_file,
-            traces=traces_all,
-            labels=labels_all,
-            plaintexts=plaintext_all,
-            key=profiling_target.key
-        )
+    #     if idx == 0:
+    #         print(trace_obj.value.shape)
+    #         print(trace_obj.leakage.shape)
+
+    #     if (idx % 5000) == 0:
+    #         chunk_file = f"profiling_chunk_{idx}.npz"
+    #         np.savez(
+    #             chunk_file,
+    #             traces=traces_all,
+    #             labels=labels_all,
+    #             plaintexts=plaintext_all,
+    #             key=profiling_target.key
+    #         )
+    #         traces_all = []
+    #         labels_all = []
+    #         plaintext_all = []
+
+    # profiling_dataset_file = f"profiling_{args.target}_{timestamp}.npz"
+    # print(f"Saving profiling traces to {profiling_dataset_file}...")
+    # np.savez(
+    #         profiling_dataset_file,
+    #         traces=traces_all,
+    #         labels=labels_all,
+    #         plaintexts=plaintext_all,
+    #         key=profiling_target.key
+    #     )
     
     print(f"Generating {args.N_ATTACK} attack traces...")
     container = CortexMAesContainer(attack_target, args.N_ATTACK)
@@ -79,20 +97,32 @@ if __name__ == "__main__":
     traces_all = []
     labels_all = []
     plaintext_all = []
-    for trace_obj in container:
+    for idx, trace_obj in enumerate(tqdm(container)):
         plaintext_all.append(trace_obj.value)
         traces_all.append(trace_obj.leakage)
         labels_all.append([sbox[np.array(keys) ^ np.array(trace_obj.value)]])
 
-    attack_dataset_file = f"attack_{args.target}_{timestamp}.npz"
-    print(f"Saving attack traces to {attack_dataset_file}...")
-    np.savez(
-            attack_dataset_file,
-            traces=traces_all,
-            labels=labels_all,
-            plaintexts=plaintext_all,
-            key=attack_target.key
-        )
+        if (idx % 5000) == 0:
+            np.savez(
+                f"attack_chunk_{idx}.npz",
+                traces=traces_all,
+                labels=labels_all,
+                plaintexts=plaintext_all,
+                key=profiling_target.key
+            )
+            traces_all = []
+            labels_all = []
+            plaintext_all = []
+
+    # attack_dataset_file = f"attack_{args.target}_{timestamp}.npz"
+    # print(f"Saving attack traces to {attack_dataset_file}...")
+    # np.savez(
+    #         attack_dataset_file,
+    #         traces=traces_all,
+    #         labels=labels_all,
+    #         plaintexts=plaintext_all,
+    #         key=attack_target.key
+    #     )
 
     if args.CPA_ATTACK:
         print(f"Attacking traces...")
