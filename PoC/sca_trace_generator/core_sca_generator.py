@@ -16,11 +16,11 @@ class SideChannelTarget(ABC):
         self.print_cfg = Print(0)
 
         if verbose is True:
-            self.print_cfg=Print.Functions
+            self.print_cfg=Print.Functions #| Print.Code
 
         self.emu = rainbow_stm32f215(
             print_config=self.print_cfg,
-            trace_config=TraceConfig(register=HammingWeight(), mem_value=HammingWeight())
+            trace_config=TraceConfig(register=HammingWeight(), mem_value=HammingWeight(), instruction=True)
         )
 
         self._load_target(target_path)
