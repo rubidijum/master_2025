@@ -30,6 +30,7 @@ if __name__ == "__main__":
     parser.add_argument("--N_PROFILING", type=int, default=50000)
     parser.add_argument("--N_ATTACK", type=int, default=5000)
     parser.add_argument("--CPA_ATTACK", action="store_true")
+    parser.add_argument("--PLOT_LEAKAGE", action="store_true")
     args = parser.parse_args()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -38,43 +39,46 @@ if __name__ == "__main__":
         profiling_target = MbedtlsTarget(args.elf, args.N_PROFILING, verbose=False)
         attack_target = MbedtlsTarget(args.elf, args.N_ATTACK, verbose=False)
     elif args.target == "mbedtls_masked":
-        profiling_target = MbedtlsMaskedTarget(args.elf, args.N_PROFILING, verbose=False)
+        profiling_target = MbedtlsMaskedTarget(args.elf, args.N_PROFILING, verbose=True)
         attack_target = MbedtlsMaskedTarget(args.elf, args.N_ATTACK, verbose=False)
     else:
         raise ValueError("Unsupported target.")
 
-    # print(f"Generating {args.N_PROFILING} profiling traces...")
-    # container = CortexMAesContainer(profiling_target, args.N_PROFILING)
-    # print(f"{args.N_PROFILING} traces generated")
+    print(f"Generating {args.N_PROFILING} profiling traces...")
+    container = CortexMAesContainer(profiling_target, args.N_PROFILING)
+    print(f"{args.N_PROFILING} traces generated")
 
-    # print("Labeling profiling traces...")
-    # k = [byte for byte in profiling_target.key]
-    # keys = [np.array(k)] * args.N_PROFILING
+    print("Labeling profiling traces...")
+    k = [byte for byte in profiling_target.key]
+    keys = [np.array(k)] * args.N_PROFILING
     
-    # traces_all = []
-    # labels_all = []
-    # plaintext_all = []
-    # for idx, trace_obj in enumerate(tqdm(container)):
-    #     plaintext_all.append(trace_obj.value)
-    #     traces_all.append(trace_obj.leakage)
-    #     labels_all.append(sbox[k ^ trace_obj.value])
+    traces_all = []
+    labels_all = []
+    plaintext_all = []
+    for idx, trace_obj in enumerate(tqdm(container)):
+        plaintext_all.append(trace_obj.value)
+        traces_all.append(trace_obj.leakage)
+        labels_all.append(sbox[k ^ trace_obj.value])
 
-    #     if idx == 0:
-    #         print(trace_obj.value.shape)
-    #         print(trace_obj.leakage.shape)
+        if idx == 0:
+            print(trace_obj.value.shape)
+            print(trace_obj.leakage.shape)
 
-    #     if (idx % 5000) == 0:
-    #         chunk_file = f"profiling_chunk_{idx}.npz"
-    #         np.savez(
-    #             chunk_file,
-    #             traces=traces_all,
-    #             labels=labels_all,
-    #             plaintexts=plaintext_all,
-    #             key=profiling_target.key
-    #         )
-    #         traces_all = []
-    #         labels_all = []
-    #         plaintext_all = []
+            # from rainbow.utils.plot import viewer
+            # vew
+
+        if (idx % 5000) == 0 or idx == len(container) - 1:
+            chunk_file = f"profiling_chunk_{idx}_{args.target}_{timestamp}.npz"
+            np.savez(
+                chunk_file,
+                traces=traces_all,
+                labels=labels_all,
+                plaintexts=plaintext_all,
+                key=profiling_target.key
+            )
+            traces_all = []
+            labels_all = []
+            plaintext_all = []
 
     # profiling_dataset_file = f"profiling_{args.target}_{timestamp}.npz"
     # print(f"Saving profiling traces to {profiling_dataset_file}...")
@@ -102,9 +106,9 @@ if __name__ == "__main__":
         traces_all.append(trace_obj.leakage)
         labels_all.append([sbox[np.array(keys) ^ np.array(trace_obj.value)]])
 
-        if (idx % 5000) == 0:
+        if (idx % 5000) == 0 or idx == len(container) - 1:
             np.savez(
-                f"attack_chunk_{idx}.npz",
+                f"attack_chunk_{idx}_{args.target}_{timestamp}.npz",
                 traces=traces_all,
                 labels=labels_all,
                 plaintexts=plaintext_all,
@@ -123,6 +127,9 @@ if __name__ == "__main__":
     #         plaintexts=plaintext_all,
     #         key=attack_target.key
     #     )
+
+    if args.PLOT_LEAKAGE:
+        profiling_target._plot_leakage()
 
     if args.CPA_ATTACK:
         print(f"Attacking traces...")
