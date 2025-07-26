@@ -9,17 +9,19 @@ import shutil
 def concatenate_runs(directory):
     """
     Finds and concatenates .npz files in a directory, grouping them by
-    target and timestamp, and saves each run into a separate subdirectory.
+    a common run ID (target + timestamp). Saves each full run into a
+    dedicated parent directory with subdirectories for profiling and attack chunks.
     """
     if not os.path.isdir(directory):
         print(f"Error: Directory not found at '{directory}'")
         return
 
     print(f"Scanning directory: {directory}")
-    
+
     pattern = re.compile(r"^(profiling|attack)_chunk_\d+_(.+)\.npz$")
     
-    runs = defaultdict(list)
+    # A nested dictionary to group file paths by run_id, then by prefix
+    runs = defaultdict(lambda: defaultdict(list))
 
     # Find all chunk files and group them
     for f_path in glob.glob(os.path.join(directory, '*_chunk_*.npz')):
@@ -28,34 +30,42 @@ def concatenate_runs(directory):
         if match:
             prefix = match.group(1)
             run_id = match.group(2)
-            unique_key = (prefix, run_id)
-            runs[unique_key].append(f_path)
+            runs[run_id][prefix].append(f_path)
 
     if not runs:
         print("No 'profiling_chunk' or 'attack_chunk' .npz files found to process.")
         return
 
-    # Process each group of files
-    for (prefix, run_id), file_list in runs.items():
-        # Create a dedicated subdirectory for this run
-        output_dir = os.path.join(directory, f"{prefix}_{run_id}")
-        os.makedirs(output_dir, exist_ok=True)
-        
-        output_filename = os.path.join(output_dir, f"{prefix}_full.npz")
-        
-        print(f"\nProcessing run '{run_id}' ({len(file_list)} files)...")
-        print(f"  Output will be saved in: '{output_dir}'")
-        
-        process_and_save_group(sorted(file_list), output_filename)
-        
-        # Move the original chunk files into the new subdirectory to clean up
-        print(f"  Cleaning up original chunk files...")
-        for f_path in file_list:
-            try:
-                shutil.move(f_path, output_dir)
-                print(f"\t* Moved {os.path.basename(f_path)}")
-            except Exception as e:
-                print(f"\t* Warning: Could not move file {os.path.basename(f_path)}. Error: {e}")
+    # Process each distinct run
+    for run_id, prefixes in runs.items():
+        # Create the main parent directory for the run
+        run_output_dir = os.path.join(directory, run_id)
+        os.makedirs(run_output_dir, exist_ok=True)
+        print(f"\nProcessing run '{run_id}'...")
+        print(f"  Main output directory created at: '{run_output_dir}'")
+
+        # Process both 'profiling' and 'attack' prefixes if they exist for this run
+        for prefix, file_list in prefixes.items():
+            # The final concatenated file goes in the main run directory
+            output_filename = os.path.join(run_output_dir, f"{prefix}_full.npz")
+            
+            print(f"  Processing {prefix} data ({len(file_list)} files)...")
+            
+            # Process and save the concatenated file
+            process_and_save_group(sorted(file_list), output_filename)
+            
+            # Create the subdirectory for the chunks (e.g., profiling/, attack/)
+            chunks_subdir = os.path.join(run_output_dir, prefix)
+            os.makedirs(chunks_subdir, exist_ok=True)
+            
+            # Move the original chunk files into the new subdirectory
+            print(f"  Cleaning up original {prefix} chunk files...")
+            for f_path in file_list:
+                try:
+                    shutil.move(f_path, chunks_subdir)
+                    print(f"\t* Moved {os.path.basename(f_path)} to '{prefix}/'")
+                except Exception as e:
+                    print(f"\t* Warning: Could not move file {os.path.basename(f_path)}. Error: {e}")
 
 
     print("\nScript finished.")
