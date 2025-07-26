@@ -6,6 +6,14 @@ applications_aes_app/zephyr/*
 rpa_attack_app/build/*
 rpa_attack_app/zephyr/*
 
+modules/lib/picolibc/*
+
+.vscode/
+
+PoC/sca_trace_generator/data/*
+PoC/sca_trace_generator/bin/*
+PoC/sca_trace_generator/logs/*
+
 *.npz
 *.elf
 *.pyc
