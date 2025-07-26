@@ -8,11 +8,9 @@ rpa_attack_app/zephyr/*
 
 modules/lib/picolibc/*
 
-.vscode/
-
-PoC/sca_trace_generator/data/*
-PoC/sca_trace_generator/bin/*
-PoC/sca_trace_generator/logs/*
+sca_trace_generator/data/
+sca_trace_generator/bin/
+sca_trace_generator/logs/
 
 *.npz
 *.elf
