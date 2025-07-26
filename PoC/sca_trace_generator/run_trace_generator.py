@@ -9,7 +9,64 @@ from tqdm import tqdm
 
 from lascar.tools.aes import sbox
 
+def generate_and_save_traces(target_object, container, num_traces, file_prefix, target, timestamp, chunk_size=5000):
+    """
+    Generates and saves a dataset of side-channel traces in chunks.
+
+    Args:
+        target_object: The SCA target object (profiling or attack target)
+        container: The Lascar container object holding the value-leakage pairs
+        num_traces: The total number of traces to generate
+        file_prefix: A string for filename prefix (for example "profiling" or "attack")
+        target: The target implementation string
+        timestamp: The timestamp for unique filenames.
+    """
+
+    print(f"--- Generating {num_traces} {file_prefix} traces... ---")
+    chunk_num = 0
+    traces_all, labels_all, plaintext_all = [], [], []
+
+    keys = profiling_target.key
+    keys_ = np.array(list(keys), dtype=np.uint8)
+
+    for idx, trace_obj in enumerate(tqdm(container)):
+        plaintext = trace_obj.value
+        plaintext_all.append(plaintext)
+        traces_all.append(trace_obj.leakage)
+        labels = sbox[keys_ ^ np.array(plaintext, dtype=np.uint8)]
+        labels_all.append(labels)
+
+        if len(traces_all) == chunk_size:
+            print(f"Saving profiling chunk {chunk_num}...")
+            np.savez(
+                f"profiling_chunk_{chunk_num}_{target}_{timestamp}.npz",
+                traces=traces_all,
+                labels=labels_all,
+                plaintexts=plaintext_all,
+                key=profiling_target.key
+            )
+            traces_all = []
+            labels_all = []
+            plaintext_all = []
+            chunk_num += 1
+    
+    if traces_all:
+        print(f"Saving final chunk {chunk_num}...")
+        np.savez(
+                f"profiling_chunk_{chunk_num}_{target}_{timestamp}.npz",
+                traces=traces_all,
+                labels=labels_all,
+                plaintexts=plaintext_all,
+                key=profiling_target.key
+            )
+        
+    print(f"--- Finished generating {file_prefix} traces. ---")
+    
+
 class CortexMAesContainer(lascar.AbstractContainer):
+    """
+    Lascar container for CortexM target.
+    """
     def __init__(self, target_instance, num_traces):
         self.target = target_instance
         self.output_size = 16
@@ -52,43 +109,12 @@ if __name__ == "__main__":
     k = [byte for byte in profiling_target.key]
     keys = [np.array(k)] * args.N_PROFILING
     
-    traces_all = []
-    labels_all = []
-    plaintext_all = []
-    for idx, trace_obj in enumerate(tqdm(container)):
-        plaintext_all.append(trace_obj.value)
-        traces_all.append(trace_obj.leakage)
-        labels_all.append(sbox[k ^ trace_obj.value])
-
-        if idx == 0:
-            print(trace_obj.value.shape)
-            print(trace_obj.leakage.shape)
-
-            # from rainbow.utils.plot import viewer
-            # vew
-
-        if (idx % 5000) == 0 or idx == len(container) - 1:
-            chunk_file = f"profiling_chunk_{idx}_{args.target}_{timestamp}.npz"
-            np.savez(
-                chunk_file,
-                traces=traces_all,
-                labels=labels_all,
-                plaintexts=plaintext_all,
-                key=profiling_target.key
-            )
-            traces_all = []
-            labels_all = []
-            plaintext_all = []
-
-    # profiling_dataset_file = f"profiling_{args.target}_{timestamp}.npz"
-    # print(f"Saving profiling traces to {profiling_dataset_file}...")
-    # np.savez(
-    #         profiling_dataset_file,
-    #         traces=traces_all,
-    #         labels=labels_all,
-    #         plaintexts=plaintext_all,
-    #         key=profiling_target.key
-    #     )
+    generate_and_save_traces(profiling_target,
+                             container,
+                             args.N_PROFILING,
+                             "profiling",
+                             args.target,
+                             timestamp)
     
     print(f"Generating {args.N_ATTACK} attack traces...")
     container = CortexMAesContainer(attack_target, args.N_ATTACK)
@@ -97,39 +123,16 @@ if __name__ == "__main__":
     print("Labeling attack traces...")
     k = [byte for byte in attack_target.key]
     keys = [np.array(k)] * args.N_ATTACK
-    
-    traces_all = []
-    labels_all = []
-    plaintext_all = []
-    for idx, trace_obj in enumerate(tqdm(container)):
-        plaintext_all.append(trace_obj.value)
-        traces_all.append(trace_obj.leakage)
-        labels_all.append([sbox[np.array(keys) ^ np.array(trace_obj.value)]])
 
-        if (idx % 5000) == 0 or idx == len(container) - 1:
-            np.savez(
-                f"attack_chunk_{idx}_{args.target}_{timestamp}.npz",
-                traces=traces_all,
-                labels=labels_all,
-                plaintexts=plaintext_all,
-                key=profiling_target.key
-            )
-            traces_all = []
-            labels_all = []
-            plaintext_all = []
-
-    # attack_dataset_file = f"attack_{args.target}_{timestamp}.npz"
-    # print(f"Saving attack traces to {attack_dataset_file}...")
-    # np.savez(
-    #         attack_dataset_file,
-    #         traces=traces_all,
-    #         labels=labels_all,
-    #         plaintexts=plaintext_all,
-    #         key=attack_target.key
-    #     )
+    generate_and_save_traces(attack_target,
+                             container,
+                             args.N_ATTACK,
+                             "attack",
+                             args.target,
+                             timestamp)
 
     if args.PLOT_LEAKAGE:
-        profiling_target._plot_leakage()
+        profiling_target._plot_leakage(output_filename=f'annotated_trace_{args.target}_{timestamp}.png')
 
     if args.CPA_ATTACK:
         print(f"Attacking traces...")
