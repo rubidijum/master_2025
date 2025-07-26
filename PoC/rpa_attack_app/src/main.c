@@ -20,8 +20,9 @@ LOG_MODULE_REGISTER(rpa_attack_app);
 int main(void){
 	printk("RPA Attack Application\n");
 
-	// return mbedtls_aes_self_test(1);
-
+#if defined(SELF_TEST)	
+	return mbedtls_aes_self_test(1);
+#else
 	bt_enable(NULL);
 	if(bt_is_ready() != 0){
 		LOG_ERR("Bluetooth is not ready!");
@@ -65,6 +66,7 @@ int main(void){
 
 	bt_le_ext_adv_stop(adv);
 	bt_le_ext_adv_delete(adv);
+#endif /* SELF_TEST */
 
 	return 0;	
 }
