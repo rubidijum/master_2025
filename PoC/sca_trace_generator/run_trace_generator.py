@@ -6,8 +6,58 @@ from mbedtls_masked_target_generator import MbedtlsMaskedTarget
 import numpy as np
 import lascar
 from tqdm import tqdm
+import h5py
+import os
 
 from lascar.tools.aes import sbox
+
+def append_chunk_to_h5(h5_path, traces_chunk, plaintexts_chunk, labels_chunk):
+    with h5py.File(h5_path, 'a') as hf:
+        current_size = hf['traces'].shape[0]
+        chunk_size = len(traces_chunk)
+
+        hf['traces'].resize((current_size + chunk_size, hf['traces'].shape[1]))
+        hf['plaintexts'].resize((current_size + chunk_size, hf['plaintexts'].shape[1]))
+        hf['labels'].resize((current_size + chunk_size, hf['labels'].shape[1]))
+
+        hf['traces'][current_size:] = np.array(traces_chunk)
+        hf['plaintexts'][current_size:] = np.array(plaintexts_chunk)
+        hf['labels'][current_size:] = np.array(labels_chunk)
+
+def generate_h5_dataset(target_object, container, num_traces, output_filename, chunk_size=5000):
+
+    print(f"--- Generating {num_traces} traces for HDF5 file: {output_filename} ---")
+
+    first_trace = next(iter(container))
+    trace_shape = first_trace.leakage.shape
+    plaintext_shape = first_trace.value.shape
+
+    with h5py.File(output_filename, 'w') as hf:
+        hf.create_dataset('traces', shape=(0,) + trace_shape, maxshape=(None,) + trace_shape, dtype=first_trace.leakage.dtype)
+        hf.create_dataset('plaintexts', shape=(0,) + plaintext_shape, maxshape=(None,) + plaintext_shape, dtype=first_trace.value.dtype)
+        hf.create_dataset('labels', shape=(0,16), maxshape=(None,16), dtype=np.uint8)
+
+        hf.create_dataset('key', data=list(target_object.key))
+
+    keys_ = np.array(list(target_object.key), dtype=np.uint8)
+
+    traces_chunk, labels_chunk, plaintexts_chunk = [], [], []
+
+    for trace_obj in tqdm(container, desc='Generating traces'):
+        traces_chunk.append(trace_obj.leakage)
+        plaintexts_chunk.append(trace_obj.value)
+        labels_chunk.append(sbox[keys_ ^ np.array(trace_obj.value, dtype=np.uint8)])
+
+        if len(traces_chunk) == chunk_size:
+            append_chunk_to_h5(output_filename, traces_chunk, plaintexts_chunk, labels_chunk)
+            # Free memory
+            traces_chunk, labels_chunk, plaintexts_chunk = [], [], []
+    
+    # Handle leftover traces
+    if traces_chunk:
+        append_chunk_to_h5(output_filename, traces_chunk, plaintexts_chunk, labels_chunk)
+
+    print(f"--- Successfully created HDF5 dataset at '{output_filename}' ---")
 
 def generate_and_save_traces(target_object, container, num_traces, file_prefix, target, timestamp, chunk_size=5000):
     """
@@ -88,6 +138,8 @@ if __name__ == "__main__":
     parser.add_argument("--N_ATTACK", type=int, default=5000)
     parser.add_argument("--CPA_ATTACK", action="store_true")
     parser.add_argument("--PLOT_LEAKAGE", action="store_true")
+    parser.add_argument("--data_out", default="./data")
+    parser.add_argument("--out_format", choices=["npz, hdf5"], default="dhf5")
     args = parser.parse_args()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -109,12 +161,24 @@ if __name__ == "__main__":
     k = [byte for byte in profiling_target.key]
     keys = [np.array(k)] * args.N_PROFILING
     
-    generate_and_save_traces(profiling_target,
-                             container,
-                             args.N_PROFILING,
-                             "profiling",
-                             args.target,
-                             timestamp)
+    dataset_base_path = os.path.join(args.data_out, f"{args.target}_{timestamp}_dataset")
+    os.mkdir(dataset_base_path)
+
+    if args.out_format == "npz":
+        generate_and_save_traces(profiling_target,
+                                 container,
+                                 args.N_PROFILING,
+                                 "profiling",
+                                 args.target,
+                                 timestamp)
+    else:
+        profiling_dataset_path = os.path.join(dataset_base_path, "profiling")
+        os.mkdir(profiling_dataset_path)
+
+        generate_h5_dataset(profiling_target,
+                            container,
+                            args.N_PROFILING,
+                            os.path.join(profiling_dataset_path, f"profiling_{args.target}_{timestamp}.h5"))
     
     print(f"Generating {args.N_ATTACK} attack traces...")
     container = CortexMAesContainer(attack_target, args.N_ATTACK)
@@ -124,15 +188,26 @@ if __name__ == "__main__":
     k = [byte for byte in attack_target.key]
     keys = [np.array(k)] * args.N_ATTACK
 
-    generate_and_save_traces(attack_target,
-                             container,
-                             args.N_ATTACK,
-                             "attack",
-                             args.target,
-                             timestamp)
+    if args.out_format == "npz":
+        generate_and_save_traces(attack_target,
+                                container,
+                                args.N_ATTACK,
+                                "attack",
+                                args.target,
+                                timestamp)
+    else:
+        attack_dataset_path = os.path.join(dataset_base_path, "attack")
+        os.mkdir(attack_dataset_path)
+        
+        generate_h5_dataset(attack_target,
+                            container,
+                            args.N_ATTACK,
+                            os.path.join(attack_dataset_path, f"attack_{args.target}_{timestamp}.h5"))
 
     if args.PLOT_LEAKAGE:
-        profiling_target._plot_leakage(output_filename=f'annotated_trace_{args.target}_{timestamp}.png')
+        plot_dir_path = os.path.join(dataset_base_path, "plot")
+        os.mkdir(plot_dir_path)
+        profiling_target._plot_leakage(output_filename=os.path.join(plot_dir_path, f'annotated_trace_{args.target}_{timestamp}.png'))
 
     if args.CPA_ATTACK:
         print(f"Attacking traces...")
