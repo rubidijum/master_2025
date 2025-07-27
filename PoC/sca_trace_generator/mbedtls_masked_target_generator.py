@@ -6,6 +6,7 @@ from rainbow import HammingWeight
 import unicorn as uc
 
 from unicorn.arm_const import UC_ARM_REG_SP, UC_ARM_REG_LR, UC_ARM_REG_PC
+from unicorn.unicorn_const import UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
 
 AES_KEY_BITS=128
 
@@ -48,7 +49,6 @@ class MbedtlsMaskedTarget(SideChannelTarget):
         self.curr_trace_idx += 1
     
     def _load_target(self, target_path):
-
         self.emu.load(target_path)
         self.emu.setup()
 
@@ -65,6 +65,7 @@ class MbedtlsMaskedTarget(SideChannelTarget):
             raise ValueError("Required mbedtls functions not found in ELF symbols. Try recompiling and/or check symbol table.")
         
         self.key_mask = rand.randbytes(16)
+        self.current_masks = {}
 
         self.curr_trace_idx = 0
 
@@ -85,23 +86,11 @@ class MbedtlsMaskedTarget(SideChannelTarget):
 
         self.emu.reset()
 
-        # self.corruption_hook = self.emu.emu.hook_add(uc.UC_HOOK_MEM_WRITE, self._watch_for_corruption_hook)
-
         # Define memory layout
-        
-        # Static addresses for mask injection
-        # mask_key_addr = 0x00020d5c
-        # mask_sbox_addr = 0x00020d6c
-        # mask_subword_addr = 0x00020d7c
-        # mask_r_addr = 0x00020d48
+        # NOTE: The memory layout changes based on the build environment, build target, target config, etc.
+        # Make sure to check the expected values are at the correct addresses before running the emulation.
         EXIT_ADDRESS = 0xDEADBEEF
 
-        # unicorn_injected_mask_key_addr = 0x000204fc # D 
-        # unicorn_injected_mask_sbox_addr = 0x0002050c # D 
-        # unicorn_injected_mask_subword_addr = 0x0002051c # D 
-        # unicorn_r_addr = 0x000204e8 # D 
-        # unicorn_r_in_addr = 0x000204f9 # D 
-        # unicorn_r_out_addr = 0x000204f8 # D 
 
         # Optimizations off
         unicorn_injected_mask_key_addr = 0x0002ef7c # D 
@@ -122,15 +111,26 @@ class MbedtlsMaskedTarget(SideChannelTarget):
         buf_out = pt_addr + 16
         
 
-        # Avoid UC_ERR_WRITE_UNMAPPED error: map enough for the aes_ctx struct
+        # Avoid UC_ERR_WRITE_UNMAPPED error: map enough for the mbedtls_aes_context struct
+        # nr = 8 bits
+        # rk_offset = 32 bits
+        # buf_masked = 44 * 32 bits
+        # buf_mask = 44 * 32 bits
+        # buf = 44 * 32 bits
+        # 533 bytes
         self.emu[ctx_addr] = b'\x00' * 560
-        # self.emu[ctx_addr + self.emu.PAGE_SIZE] = 0
-        # self.emu[ctx_addr + self.emu.PAGE_SIZE * 2] = 0
-        # self.emu[ctx_addr + self.emu.PAGE_SIZE * 3] = 0
-        # self.emu[ctx_addr + self.emu.PAGE_SIZE * 4] = 0
 
         # Avoid UC_ERR_WRITE_UNMAPPED error
         self.emu[buf_out] = b"\x00" * 16
+        
+        self.current_masks = {
+            'key_mask': rand.randbytes(16),
+            'subword_mask': rand.randbytes(4),
+            'sbox_mask': rand.randbytes(16),
+            'r_mask': rand.randbytes(16),
+            'r_in': rand.randbytes(1),
+            'r_out': rand.randbytes(1)
+        }
         
         self.emu[key_addr] = self.key
 
@@ -138,30 +138,22 @@ class MbedtlsMaskedTarget(SideChannelTarget):
         self.emu[unicorn_injected_mask_key_addr] = self.key_mask
         
         # Inject masks for word substitutions (within key expansion)
-        subword_mask = rand.randbytes(4)
-        self.emu[unicorn_injected_mask_subword_addr] = subword_mask
+        self.emu[unicorn_injected_mask_subword_addr] = self.current_masks['subword_mask']
 
         # Inject SBOX masks
-        sbox_mask = rand.randbytes(16)
-        self.emu[unicorn_injected_mask_sbox_addr] = sbox_mask
+        self.emu[unicorn_injected_mask_sbox_addr] = self.current_masks['sbox_mask']
 
         # Inject initial state masks (r0 - r16)
-        r_mask = rand.randbytes(16)
-        self.emu[unicorn_r_addr] = r_mask
+        self.emu[unicorn_r_addr] = self.current_masks['r_mask']
 
         # Inject r_in
-        r_in = rand.randbytes(1)
-        self.emu[unicorn_r_in_addr] = r_in
+        self.emu[unicorn_r_in_addr] = self.current_masks['r_in']
 
         # Inject r_out
-        r_out = rand.randbytes(1)
-        self.emu[unicorn_r_out_addr] = r_out
+        self.emu[unicorn_r_out_addr] = self.current_masks['r_out']
 
         print("\n" + "="*60)
         print("--- Running Key Schedule ---")
-
-        # lr_before = self.emu[UC_ARM_REG_LR]
-        # print(f"Link Register BEFORE setkey call: {lr_before}")
 
         # Setup the encryption key
         self.emu['r0'] = ctx_addr
@@ -170,11 +162,14 @@ class MbedtlsMaskedTarget(SideChannelTarget):
         self.emu.emu.reg_write(UC_ARM_REG_LR, EXIT_ADDRESS)
         self.emu.start(self.emu.functions['mbedtls_aes_setkey_enc'] | 1, 0)
 
-        # lr_after = self.emu[UC_ARM_REG_LR]
-        # print(f"Link Register AFTER setkey call: {lr_after}")
+        print("--- Key Schedule Complete ---")
+        print("="*60 + "\n")
 
-        # print("[DEBUG] Setting up stack watchpoint hooks...")
-        # self.setup_hook = self.emu.emu.hook_add(uc.UC_HOOK_CODE, self._hook_for_finding_stack)
+        # Focus only on the encryption
+        self.emu.trace.clear()
+        self.power_trace = []
+        self.annotations = []
+        self.curr_trace_idx = 0
 
         # Run encryption
         self.emu['r0'] = ctx_addr
@@ -186,6 +181,9 @@ class MbedtlsMaskedTarget(SideChannelTarget):
 
         self.emu['r3'] = buf_out
 
+        print("\n\n" + "*"*60)
+        print("--- Running Encryption ---")
+
         try:
             self.emu.emu.reg_write(UC_ARM_REG_LR, EXIT_ADDRESS)
             self.emu.start(self.emu.functions['mbedtls_aes_crypt_ecb'] | 1, 0)
@@ -195,6 +193,9 @@ class MbedtlsMaskedTarget(SideChannelTarget):
                 self.emu.emu.hook_del(self.setup_hook)
             if hasattr(self, 'write_hook'):
                 self.emu.emu.hook_del(self.write_hook)
+
+        print("--- Encryption Complete ---")
+        print("*"*60 + "\n\n")
 
         # Update the leakage
         for event in self.emu.trace:
@@ -233,8 +234,8 @@ class MbedtlsMaskedTarget(SideChannelTarget):
                     color='black', fontsize=5)
 
         ax.set_title("Power Trace with Function Entry Points")
-        ax.set_xlabel("Sample Index (Memory Read Events)")
-        ax.set_ylabel("Value Read")
+        ax.set_xlabel("Memory R/W Events")
+        ax.set_ylabel("Memory Value")
         ax.legend()
         ax.grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.5)
         fig.tight_layout()
