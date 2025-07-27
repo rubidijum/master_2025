@@ -11,7 +11,9 @@ import os
 
 from lascar.tools.aes import sbox
 
-def append_chunk_to_h5(h5_path, traces_chunk, plaintexts_chunk, labels_chunk):
+saved_annotations = None
+
+def append_chunk_to_h5(h5_path, traces_chunk, plaintexts_chunk, labels_chunk, rin_chunk, rout_chunk):
     with h5py.File(h5_path, 'a') as hf:
         current_size = hf['traces'].shape[0]
         chunk_size = len(traces_chunk)
@@ -24,38 +26,75 @@ def append_chunk_to_h5(h5_path, traces_chunk, plaintexts_chunk, labels_chunk):
         hf['plaintexts'][current_size:] = np.array(plaintexts_chunk)
         hf['labels'][current_size:] = np.array(labels_chunk)
 
+        rin_as_integers = np.array([b[0] for b in rin_chunk], dtype=np.uint8)
+        rout_as_integers = np.array([b[0] for b in rout_chunk], dtype=np.uint8)
+
+        hf['masks_rin'].resize((current_size + chunk_size, 1))
+        hf['masks_rout'].resize((current_size + chunk_size, 1))
+
+        hf['masks_rin'][current_size:] = rin_as_integers.reshape(-1, 1)
+        hf['masks_rout'][current_size:] = rout_as_integers.reshape(-1, 1)
+
 def generate_h5_dataset(target_object, container, num_traces, output_filename, chunk_size=5000):
 
     print(f"--- Generating {num_traces} traces for HDF5 file: {output_filename} ---")
 
-    first_trace = next(iter(container))
-    trace_shape = first_trace.leakage.shape
-    plaintext_shape = first_trace.value.shape
+    first_trace_obj = next(iter(container))
+
+    first_leakage = target_object._get_leakage()
+    saved_annotations = target_object.annotations
 
     with h5py.File(output_filename, 'w') as hf:
-        hf.create_dataset('traces', shape=(0,) + trace_shape, maxshape=(None,) + trace_shape, dtype=first_trace.leakage.dtype)
-        hf.create_dataset('plaintexts', shape=(0,) + plaintext_shape, maxshape=(None,) + plaintext_shape, dtype=first_trace.value.dtype)
-        hf.create_dataset('labels', shape=(0,16), maxshape=(None,16), dtype=np.uint8)
+        hf.create_dataset('traces', shape=(0,) + first_leakage.shape, maxshape=(None,) + first_leakage.shape, dtype=first_leakage.dtype)
+        hf.create_dataset('plaintexts', shape=(0, 16), maxshape=(None, 16), dtype=np.uint8)
+        hf.create_dataset('labels', shape=(0, 16), maxshape=(None, 16), dtype=np.uint8)
+        
+        # Create datasets for each per-trace mask
+        hf.create_dataset('masks_rin', shape=(0, 1), maxshape=(None, 1), dtype=np.uint8)
+        hf.create_dataset('masks_rout', shape=(0, 1), maxshape=(None, 1), dtype=np.uint8)
 
         hf.create_dataset('key', data=list(target_object.key))
+        
+        if saved_annotations:
+            annotation_idcs = [item[0] for item in saved_annotations]
+            annotation_names = [item[1] for item in saved_annotations]
+        
+            hf.create_dataset('annotations_idcs', data=np.array(annotation_idcs, dtype=np.uint32))
+            hf.create_dataset('annotations_names', data=np.array(annotation_names, dtype=h5py.special_dtype(vlen=str)))
+        else:
+            print("Warning: No annotations generated.")
 
     keys_ = np.array(list(target_object.key), dtype=np.uint8)
 
     traces_chunk, labels_chunk, plaintexts_chunk = [], [], []
+    rin_chunk, rout_chunk = [], []
 
-    for trace_obj in tqdm(container, desc='Generating traces'):
-        traces_chunk.append(trace_obj.leakage)
+    # Handle first chunk
+    traces_chunk.append(first_leakage)
+    plaintexts_chunk.append(first_trace_obj.value)
+    labels_chunk.append(sbox[keys_ ^ np.array(first_trace_obj.value, dtype=np.uint8)])
+    rin_chunk.append(target_object.current_masks['r_in'])
+    rout_chunk.append(target_object.current_masks['r_out'])
+
+    for trace_obj in tqdm(container, desc='Generating remaining traces', total=num_traces, initial=1):
+        leakage = target_object._get_leakage()
+        
+        traces_chunk.append(leakage)
         plaintexts_chunk.append(trace_obj.value)
         labels_chunk.append(sbox[keys_ ^ np.array(trace_obj.value, dtype=np.uint8)])
+        
+        # Append the individual masks
+        rin_chunk.append(target_object.current_masks['r_in'])
+        rout_chunk.append(target_object.current_masks['r_out'])
 
         if len(traces_chunk) == chunk_size:
-            append_chunk_to_h5(output_filename, traces_chunk, plaintexts_chunk, labels_chunk)
-            # Free memory
-            traces_chunk, labels_chunk, plaintexts_chunk = [], [], []
+            append_chunk_to_h5(output_filename, traces_chunk, plaintexts_chunk, labels_chunk, rin_chunk, rout_chunk)
+            # Clear lists for the next chunk
+            traces_chunk, labels_chunk, plaintexts_chunk, rin_chunk, rout_chunk = [], [], [], [], []
     
     # Handle leftover traces
     if traces_chunk:
-        append_chunk_to_h5(output_filename, traces_chunk, plaintexts_chunk, labels_chunk)
+        append_chunk_to_h5(output_filename, traces_chunk, plaintexts_chunk, labels_chunk, rin_chunk, rout_chunk)
 
     print(f"--- Successfully created HDF5 dataset at '{output_filename}' ---")
 
