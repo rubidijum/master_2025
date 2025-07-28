@@ -187,7 +187,7 @@ if __name__ == "__main__":
         profiling_target = MbedtlsTarget(args.elf, args.N_PROFILING, verbose=False)
         attack_target = MbedtlsTarget(args.elf, args.N_ATTACK, verbose=False)
     elif args.target == "mbedtls_masked":
-        profiling_target = MbedtlsMaskedTarget(args.elf, args.N_PROFILING, verbose=True)
+        profiling_target = MbedtlsMaskedTarget(args.elf, args.N_PROFILING, verbose=False)
         attack_target = MbedtlsMaskedTarget(args.elf, args.N_ATTACK, verbose=False)
     else:
         raise ValueError("Unsupported target.")
