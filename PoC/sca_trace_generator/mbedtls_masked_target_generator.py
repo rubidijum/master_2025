@@ -7,6 +7,7 @@ import unicorn as uc
 
 from unicorn.arm_const import UC_ARM_REG_SP, UC_ARM_REG_LR, UC_ARM_REG_PC
 from unicorn.unicorn_const import UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
+from Crypto.Cipher import AES
 
 AES_KEY_BITS=128
 
@@ -27,6 +28,11 @@ class MbedtlsMaskedTarget(SideChannelTarget):
                         
             # Record the sample index and the function name.
             self.pending_annotation_fname = self.function_entry_addrs[func_address_with_thumb_bit]
+
+    def _watch_out(self, uc,access, address, size, value, user_data):
+        if self.b_out_addr <= address < self.b_out_addr+16:
+            wrote=bytes(self.emu.emu.mem_read(self.b_out_addr, 16))
+            print(f"[WRITE OUT] addr=0x{address:X} size={size} out={wrote.hex()}")
 
     def _hook_mem(self, uc, access, address, size, value, user_data):
         """
@@ -72,6 +78,7 @@ class MbedtlsMaskedTarget(SideChannelTarget):
         # Annotate the functions
         self.emu.emu.hook_add(uc.UC_HOOK_CODE, self._hook_function_entry)
         self.emu.emu.hook_add(uc.UC_HOOK_MEM_READ | uc.UC_HOOK_MEM_WRITE, self._hook_mem)
+        self.emu.emu.hook_add(uc.UC_HOOK_MEM_WRITE, self._watch_out)
     
     # TODO: Extract memory layout from this function
     # TODO: Add error checking for correct memory mappings (e.g. confirm that <disassembly_addr_of_x> is the same as <this_script_addr_of_x>)
@@ -93,12 +100,12 @@ class MbedtlsMaskedTarget(SideChannelTarget):
 
 
         # Optimizations off
-        unicorn_injected_mask_key_addr = 0x0002ef7c # D 
-        unicorn_injected_mask_sbox_addr = 0x0002ef8c # D 
-        unicorn_injected_mask_subword_addr = 0x0002ef9c # D 
-        unicorn_r_addr = 0x0002ef68 # D 
-        unicorn_r_in_addr = 0x0002ef79 # D 
-        unicorn_r_out_addr = 0x0002ef78 # D 
+        unicorn_injected_mask_key_addr = 0x0002ef6c # D 
+        unicorn_injected_mask_sbox_addr = 0x0002ef7c # D 
+        unicorn_injected_mask_subword_addr = 0x0002ef8c # D 
+        unicorn_r_addr = 0x0002ef58 # D 
+        unicorn_r_in_addr = 0x0002ef69 # D 
+        unicorn_r_out_addr = 0x0002ef68 # D 
 
         # AES algo adresses
         key_addr = 0x20000188
@@ -109,6 +116,7 @@ class MbedtlsMaskedTarget(SideChannelTarget):
         ctx_addr = safe_start_addr
         pt_addr = ctx_addr + 560
         buf_out = pt_addr + 16
+        self.b_out_addr=buf_out
         
 
         # Avoid UC_ERR_WRITE_UNMAPPED error: map enough for the mbedtls_aes_context struct
@@ -159,8 +167,8 @@ class MbedtlsMaskedTarget(SideChannelTarget):
         self.emu['r0'] = ctx_addr
         self.emu['r1'] = key_addr
         self.emu['r2'] = AES_KEY_BITS
-        self.emu.emu.reg_write(UC_ARM_REG_LR, EXIT_ADDRESS)
-        self.emu.start(self.emu.functions['mbedtls_aes_setkey_enc'] | 1, 0)
+        self.emu.emu.reg_write(UC_ARM_REG_LR, EXIT_ADDRESS|1)
+        self.emu.start(self.emu.functions['mbedtls_aes_setkey_enc_masked'] | 1, 0)
 
         print("--- Key Schedule Complete ---")
         print("="*60 + "\n")
@@ -174,19 +182,23 @@ class MbedtlsMaskedTarget(SideChannelTarget):
         # Run encryption
         self.emu['r0'] = ctx_addr
         # int mode
-        self.emu['r1'] = MBEDTLS_AES_ENCRYPT
+        # self.emu['r1'] = MBEDTLS_AES_ENCRYPT
         # Inject the generated plaintext
         self.emu[pt_addr] = plaintext
-        self.emu['r2'] = pt_addr
+        self.emu['r1'] = pt_addr
 
-        self.emu['r3'] = buf_out
+        self.emu['r2'] = buf_out
 
         print("\n\n" + "*"*60)
         print("--- Running Encryption ---")
 
+        pt_pre = self.emu.emu.mem_read(pt_addr, 16)
+        print(f"PLAIN pre: {pt_pre}")
+        print(f"CIPHER pre: {self.emu.emu.mem_read(buf_out, 16)}")
+
         try:
-            self.emu.emu.reg_write(UC_ARM_REG_LR, EXIT_ADDRESS)
-            self.emu.start(self.emu.functions['mbedtls_aes_crypt_ecb'] | 1, 0)
+            self.emu.emu.reg_write(UC_ARM_REG_LR, EXIT_ADDRESS|1)
+            self.emu.start(self.emu.functions['mbedtls_internal_aes_encrypt_masked'] | 1, 0)
         finally:
             # Clean up the hooks after the run
             if hasattr(self, 'setup_hook'):
@@ -197,10 +209,36 @@ class MbedtlsMaskedTarget(SideChannelTarget):
         print("--- Encryption Complete ---")
         print("*"*60 + "\n\n")
 
+        print(f"KEY: {self.emu.emu.mem_read(key_addr, 16)}")
+        print(f"PLAIN post: {self.emu.emu.mem_read(pt_addr, 16)}")
+        print(f"CIPHER post: {self.emu.emu.mem_read(buf_out, 16)}")
+
+        E_py = AES.new(bytes(self.key), AES.MODE_ECB).encrypt(pt_pre)
+        print(f"E_py: {E_py}")
+
+        E_test = AES.new(bytes(b'\xde\xad\xbe\xef'*4), AES.MODE_ECB).encrypt(pt_pre)
+        print(f"Retry with DEADBEEF key : {E_test}")
+
+        start=ctx_addr
+        end=ctx_addr+560+0x400
+        pattern=E_py
+        blob = bytes(self.emu.emu.mem_read(start, end-start))
+        off = blob.find(pattern)
+        if off != -1:
+            print(f"[FOUND] at {start+off}")
+        else:
+            print("[NOT FOUND]")
+
         # Update the leakage
         for event in self.emu.trace:
             if 'value' in event:
                 self.power_trace.append(event['value'])
+
+    def _update_key(self, key):
+        self.key = key
+
+    def _get_key(self):
+        return self.key
 
     def _get_leakage(self):
         return np.array(self.power_trace) + np.random.normal(0, 1.0, (len(self.power_trace)))
