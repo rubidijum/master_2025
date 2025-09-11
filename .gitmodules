@@ -1,5 +1,5 @@
-[submodule "PoC/zephyr"]
-	path = PoC/zephyr
+[submodule "zephyr"]
+	path = zephyr
 	url = https://github.com/zephyrproject-rtos/zephyr.git
 [submodule "PoC/modules/crypto/mbedtls"]
 	path = PoC/modules/crypto/mbedtls
