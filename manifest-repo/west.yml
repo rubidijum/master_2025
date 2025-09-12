@@ -1,0 +1,14 @@
+manifest:
+  projects:
+    - name: zephyr
+      url: https://github.com/zephyrproject-rtos/zephyr
+      revision: main
+      path: zephyr
+      import: true
+      west-commands: scripts/west-commands.yml
+
+    - name: mbedtls
+      revision: masking-patches
+      url: https://github.com/rubidijum/mbedtls-masking.git
+      path: PoC/modules/crypto/mbedtls
+
